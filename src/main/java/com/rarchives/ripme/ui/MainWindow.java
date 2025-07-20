@@ -17,6 +17,10 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.*;
 import java.util.List;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Stream;
 
 import javax.imageio.ImageIO;
@@ -39,6 +43,7 @@ import org.apache.logging.log4j.core.config.LoggerConfig;
 import com.rarchives.ripme.ripper.AbstractRipper;
 import com.rarchives.ripme.uiUtils.ContextActionProtections;
 import com.rarchives.ripme.utils.RipUtils;
+import com.rarchives.ripme.utils.TransferRate;
 import com.rarchives.ripme.utils.Utils;
 
 /**
@@ -58,6 +63,7 @@ public final class MainWindow implements Runnable, RipStatusHandler {
     private static JButton panicButton;
 
     private static JLabel statusLabel;
+    private static final JLabel transferRateLabel = new JLabel();
     private static JButton openButton;
     private static JProgressBar statusProgress;
 
@@ -129,6 +135,23 @@ public final class MainWindow implements Runnable, RipStatusHandler {
     private static Image mainIcon;
 
     private static AbstractRipper ripper;
+
+    public static final int TRANSFER_RATE_REFRESH_RATE = 200;
+    private static final TransferRate transferRate = new TransferRate();
+
+    private static final ScheduledExecutorService executor = Executors.newScheduledThreadPool(1);
+    private Future<?> rateRefresherFuture = null;
+    private final Runnable rateRefresher = () -> {
+        if (isHalted) {
+            if (rateRefresherFuture != null) {
+                rateRefresherFuture.cancel(true);
+                rateRefresherFuture = null;
+            }
+            transferRateLabel.setText("");
+            return;
+        }
+        transferRateLabel.setText(transferRate.formatHumanTransferRate());
+    };
 
     private void updateQueue(DefaultListModel<Object> model) {
         if (model == null)
@@ -358,16 +381,26 @@ public final class MainWindow implements Runnable, RipStatusHandler {
 
         statusLabel = new JLabel(Utils.getLocalizedString("inactive"));
         statusLabel.setHorizontalAlignment(JLabel.CENTER);
+        transferRateLabel.setHorizontalAlignment(JLabel.RIGHT);
+        transferRateLabel.setFont(Font.getFont(Font.MONOSPACED));
         openButton = new JButton();
         openButton.setVisible(false);
         JPanel statusPanel = new JPanel(new GridBagLayout());
         statusPanel.setBorder(emptyBorder);
 
         gbc.gridx = 0;
+        gbc.weightx = 1;
         statusPanel.add(statusLabel, gbc);
+        gbc.gridx = 1;
+        gbc.weightx = 0;
+        statusPanel.add(transferRateLabel, gbc);
+        gbc.gridx = 0;
+        gbc.weightx = 1;
+        gbc.gridwidth = 2;
         gbc.gridy = 1;
         statusPanel.add(openButton, gbc);
         gbc.gridy = 0;
+        gbc.gridwidth = 1;
 
         JPanel progressPanel = new JPanel(new GridBagLayout());
         progressPanel.setBorder(emptyBorder);
@@ -1380,6 +1413,9 @@ public final class MainWindow implements Runnable, RipStatusHandler {
             isHalted = false;
             stopButton.setEnabled(true);
             panicButton.setEnabled(true);
+            if (rateRefresherFuture == null || rateRefresherFuture.isDone()) {
+                rateRefresherFuture = executor.scheduleAtFixedRate(rateRefresher, 0, TRANSFER_RATE_REFRESH_RATE, TimeUnit.MILLISECONDS);
+            }
             t.start();
         }
     }
@@ -1408,6 +1444,7 @@ public final class MainWindow implements Runnable, RipStatusHandler {
         statusProgress.setValue(100);
         openButton.setVisible(false);
         statusLabel.setVisible(true);
+        transferRateLabel.setVisible(true);
         pack();
         boolean failed = false;
         try {
@@ -1536,13 +1573,21 @@ public final class MainWindow implements Runnable, RipStatusHandler {
 
     private synchronized void handleEvent(StatusEvent evt) {
         RipStatusMessage msg = evt.msg;
+        RipStatusMessage.STATUS status = msg.getStatus();
+
+        // CHUNK_BYTES is noisy, so handle it before any other computation
+        if (status == RipStatusMessage.STATUS.CHUNK_BYTES) {
+            transferRate.addChunk((Integer) msg.getObject());
+            transferRateLabel.setText(transferRate.formatHumanTransferRate());
+            return;
+        }
 
         int completedPercent = evt.ripper.getCompletionPercentage();
         statusProgress.setValue(completedPercent);
         statusProgress.setVisible(true);
         status(evt.ripper.getStatusText());
 
-        switch (msg.getStatus()) {
+        switch (status) {
         case LOADING_RESOURCE:
         case DOWNLOAD_STARTED:
             if (LOGGER.isEnabled(Level.INFO)) {
