@@ -1365,6 +1365,10 @@ public final class MainWindow implements Runnable, RipStatusHandler {
                 });
             }
         }
+        if (!HISTORY.isEmpty()) {
+            // Fix "WARNING: row index is bigger than sorter's row count. Most likely this is a wrong sorter usage"
+            historyTableModel.fireTableDataChanged();
+        }
     }
 
     private void saveHistory() {
