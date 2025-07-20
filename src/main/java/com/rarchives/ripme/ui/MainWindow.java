@@ -48,12 +48,14 @@ public final class MainWindow implements Runnable, RipStatusHandler {
 
     private static final Logger LOGGER = LogManager.getLogger(MainWindow.class);
 
-    private static boolean isRipping = false; // Flag to indicate if we're ripping something
+    private static boolean isRipping = false; // true if active or true if gracefully stopping
+    private static boolean isHalted = true; // true if fully halted/panic button pressed
 
     private static JFrame mainFrame;
 
     private static JTextField ripTextfield;
     private static JButton ripButton, stopButton;
+    private static JButton panicButton;
 
     private static JLabel statusLabel;
     private static JButton openButton;
@@ -326,6 +328,8 @@ public final class MainWindow implements Runnable, RipStatusHandler {
         ripButton = new JButton("<html><font size=\"5\"><b>Rip</b></font></html>", ripIcon);
         stopButton = new JButton("<html><font size=\"5\"><b>Stop</b></font></html>");
         stopButton.setEnabled(false);
+        panicButton = new JButton("<html><font size=\"5\"><b>Panic!</b></font></html>");
+        panicButton.setEnabled(false);
         try {
             Image stopIcon = ImageIO.read(getClass().getClassLoader().getResource("stop.png"));
             stopButton.setIcon(new ImageIcon(stopIcon));
@@ -348,6 +352,8 @@ public final class MainWindow implements Runnable, RipStatusHandler {
         ripPanel.add(ripButton, gbc);
         gbc.gridx = 3;
         ripPanel.add(stopButton, gbc);
+        gbc.gridx = 4;
+        ripPanel.add(panicButton, gbc);
         gbc.weightx = 1;
 
         statusLabel = new JLabel(Utils.getLocalizedString("inactive"));
@@ -807,7 +813,25 @@ public final class MainWindow implements Runnable, RipStatusHandler {
                 statusProgress.setVisible(false);
                 pack();
                 statusProgress.setValue(0);
-                status(Utils.getLocalizedString("download.interrupted"));
+                //status(Utils.getLocalizedString("download.interrupted"));
+                status("Rip gracefully stopping");
+                appendLog("Download interrupted", Color.RED);
+            }
+        });
+
+        panicButton.addActionListener(event -> {
+            if (ripper != null) {
+                ripper.stop();
+                ripper.panic();
+                isRipping = false;
+                isHalted = true;
+                stopButton.setEnabled(false);
+                panicButton.setEnabled(false);
+                statusProgress.setValue(0);
+                statusProgress.setVisible(false);
+                pack();
+                statusProgress.setValue(0);
+                status("Rip interrupted"); // TODO localize
                 appendLog("Download interrupted", Color.RED);
             }
         });
@@ -1061,6 +1085,9 @@ public final class MainWindow implements Runnable, RipStatusHandler {
             public void intervalAdded(ListDataEvent arg0) {
                 updateQueue();
 
+                if (ripper != null && ripper.isStopped()) {
+                    return; // do not auto re-rip
+                }
                 if (!isRipping) {
                     ripNextAlbum();
                 }
@@ -1323,14 +1350,15 @@ public final class MainWindow implements Runnable, RipStatusHandler {
     }
 
     private void ripNextAlbum() {
-        isRipping = true;
-
         // Save current state of queue to configuration.
         Utils.setConfigList("queue", queueListModel.elements());
 
         if (queueListModel.isEmpty()) {
             // End of queue
             isRipping = false;
+            isHalted = true;
+            stopButton.setEnabled(false);
+            panicButton.setEnabled(false);
             return;
         }
 
@@ -1348,6 +1376,10 @@ public final class MainWindow implements Runnable, RipStatusHandler {
 
             ripNextAlbum();
         } else {
+            isRipping = true;
+            isHalted = false;
+            stopButton.setEnabled(true);
+            panicButton.setEnabled(true);
             t.start();
         }
     }
@@ -1372,6 +1404,7 @@ public final class MainWindow implements Runnable, RipStatusHandler {
             return null;
         }
         stopButton.setEnabled(true);
+        panicButton.setEnabled(true);
         statusProgress.setValue(100);
         openButton.setVisible(false);
         statusLabel.setVisible(true);
@@ -1502,10 +1535,6 @@ public final class MainWindow implements Runnable, RipStatusHandler {
     }
 
     private synchronized void handleEvent(StatusEvent evt) {
-        if (ripper.isStopped()) {
-            return;
-        }
-
         RipStatusMessage msg = evt.msg;
 
         int completedPercent = evt.ripper.getCompletionPercentage();
@@ -1551,7 +1580,10 @@ public final class MainWindow implements Runnable, RipStatusHandler {
             if (LOGGER.isEnabled(Level.ERROR)) {
                 appendLog((String) msg.getObject(), Color.RED);
             }
+            isRipping = false;
+            isHalted = true;
             stopButton.setEnabled(false);
+            panicButton.setEnabled(false);
             statusProgress.setValue(0);
             statusProgress.setVisible(false);
             openButton.setVisible(false);
@@ -1562,6 +1594,11 @@ public final class MainWindow implements Runnable, RipStatusHandler {
         case RIP_COMPLETE:
             RipStatusComplete rsc = (RipStatusComplete) msg.getObject();
             String url = ripper.getURL().toExternalForm();
+            if (ripper.isStopped()) {
+                // rip interrupted; push to queue to resume on next start
+                queueListModel.insertElementAt(url, 0);
+                // updateQueue() is already called by the queueListModel ListDataListener
+            }
             if (HISTORY.containsURL(url)) {
                 // TODO update "modifiedDate" of entry in HISTORY
                 HistoryEntry entry = HISTORY.getEntryByURL(url);
@@ -1584,7 +1621,9 @@ public final class MainWindow implements Runnable, RipStatusHandler {
                 Utils.playSound("camera.wav");
             }
             saveHistory();
+            Utils.saveConfig();
             stopButton.setEnabled(false);
+            panicButton.setEnabled(false);
             statusProgress.setValue(0);
             statusProgress.setVisible(false);
             openButton.setVisible(true);
@@ -1644,7 +1683,12 @@ public final class MainWindow implements Runnable, RipStatusHandler {
                 }
             });
             pack();
-            ripNextAlbum();
+            if (ripper.isStopped()) {
+                isRipping = false;
+                isHalted = true;
+            } else {
+                ripNextAlbum();
+            }
             break;
         case COMPLETED_BYTES:
             // Update completed bytes
@@ -1657,6 +1701,9 @@ public final class MainWindow implements Runnable, RipStatusHandler {
                 appendLog((String) msg.getObject(), Color.RED);
             }
             stopButton.setEnabled(false);
+            panicButton.setEnabled(false);
+            isRipping = false;
+            isHalted = true;
             statusProgress.setValue(0);
             statusProgress.setVisible(false);
             openButton.setVisible(false);

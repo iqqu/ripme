@@ -71,11 +71,22 @@ public abstract class AbstractRipper
     // Everytime addUrlToDownload skips a already downloaded url this increases by 1
     public int alreadyDownloadedUrls = 0;
     private final AtomicBoolean shouldStop = new AtomicBoolean(false);
+    private final AtomicBoolean shouldPanic = new AtomicBoolean(false);
     private static boolean thisIsATest = false;
 
     public void stop() {
         logger.trace("stop()");
         shouldStop.set(true);
+    }
+
+    public void panic() {
+        logger.trace("panic()");
+        shouldStop.set(true);
+        shouldPanic.set(true);
+    }
+
+    public boolean isPanicked() {
+        return shouldPanic.get();
     }
 
     public boolean isStopped() {
