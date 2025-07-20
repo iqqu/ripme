@@ -48,8 +48,7 @@ public final class MainWindow implements Runnable, RipStatusHandler {
 
     private static final Logger LOGGER = LogManager.getLogger(MainWindow.class);
 
-    /* not static! */
-    private boolean isRipping = false; // Flag to indicate if we're ripping something
+    private static boolean isRipping = false; // Flag to indicate if we're ripping something
 
     private static JFrame mainFrame;
 
@@ -1482,7 +1481,7 @@ public final class MainWindow implements Runnable, RipStatusHandler {
                 mainWindow.statusWithColor("This URL is already in queue: " + url, Color.ORANGE);
                 ripTextfield.setText("");
             }
-            else if(!mainWindow.isRipping){
+            else if(!isRipping){
                 mainWindow.ripNextAlbum();
             }
         }
